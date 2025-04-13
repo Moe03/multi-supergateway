@@ -4,7 +4,7 @@
   "description": "Express adapter for MCP servers.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Moe03/express-mcp.git"
+    "url": "git+https://github.com/Moe03/express-mcp-adapter.git"
   },
   "keywords": [
     "mcp",

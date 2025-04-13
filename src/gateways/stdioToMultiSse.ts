@@ -125,7 +125,7 @@ export async function stdioToMultiSse(args: StdioToMultiSseArgs) {
 
     // Create server
     const server = new Server(
-      { name: `supergateway-${finalEndpoint}`, version: getVersion() },
+      { name: `express-mcp-adapter-${finalEndpoint}`, version: getVersion() },
       { capabilities: {} },
     )
 

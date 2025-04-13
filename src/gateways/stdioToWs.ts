@@ -58,7 +58,7 @@ export async function stdioToWs(args: StdioToWsArgs) {
     })
 
     const server = new Server(
-      { name: 'supergateway', version: getVersion() },
+      { name: 'express-mcp-adapter', version: getVersion() },
       { capabilities: {} },
     )
 

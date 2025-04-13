@@ -1,25 +1,3 @@
-#!/usr/bin/env node
-/**
- * index.ts
- *
- * Run MCP stdio servers over SSE, convert between stdio, SSE, WS.
- *
- * Usage:
- *   # stdio→SSE
- *   npx -y supergateway --stdio "npx -y @modelcontextprotocol/server-filesystem /" \
- *                       --port 8000 --baseUrl http://localhost:8000 --ssePath /sse --messagePath /message
- *
- *   # stdio→Multiple SSE Endpoints
- *   npx -y supergateway --stdio "npx -y @modelcontextprotocol/server-filesystem /" \
- *                       --port 8000 --endpoints /agent-1,/agent-2,/agent-3
- *
- *   # SSE→stdio
- *   npx -y supergateway --sse "https://mcp-server-ab71a6b2-cd55-49d0-adba-562bc85956e3.supermachine.app"
- *
- *   # stdio→WS
- *   npx -y supergateway --stdio "npx -y @modelcontextprotocol/server-filesystem /" --outputTransport ws
- */
-
 import yargs from 'yargs'
 import { hideBin } from 'yargs/helpers'
 import { Logger } from './types.js'
@@ -28,8 +6,9 @@ import { stdioToMultiSse } from './gateways/stdioToMultiSse.js'
 import { sseToStdio } from './gateways/sseToStdio.js'
 import { stdioToWs } from './gateways/stdioToWs.js'
 
-const log = (...args: any[]) => console.log('[supergateway]', ...args)
-const logStderr = (...args: any[]) => console.error('[supergateway]', ...args)
+const log = (...args: any[]) => console.log('[express-mcp-adapter]', ...args)
+const logStderr = (...args: any[]) =>
+  console.error('[express-mcp-adapter]', ...args)
 
 const noneLogger: Logger = {
   info: () => {},
@@ -153,9 +132,6 @@ async function main() {
   })
 
   logger.info('Starting...')
-  logger.info(
-    'Supergateway is supported by Supermachine (hosted MCPs) - https://supermachine.ai',
-  )
   logger.info(`  - outputTransport: ${outputTransport}`)
 
   try {
