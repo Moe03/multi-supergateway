@@ -43,7 +43,7 @@ export async function sseToStdio(args: SseToStdioArgs) {
   })
 
   const sseClient = new Client(
-    { name: 'express-mcp-adapter', version: getVersion() },
+    { name: 'supergateway', version: getVersion() },
     { capabilities: {} },
   )
 
@@ -60,7 +60,7 @@ export async function sseToStdio(args: SseToStdioArgs) {
 
   const stdioServer = new Server(
     sseClient.getServerVersion() ?? {
-      name: 'express-mcp-adapter',
+      name: 'supergateway',
       version: getVersion(),
     },
     { capabilities: sseClient.getServerCapabilities() },

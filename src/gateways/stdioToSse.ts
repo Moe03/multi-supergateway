@@ -73,7 +73,7 @@ export async function stdioToSse(args: StdioToSseArgs) {
   })
 
   const server = new Server(
-    { name: 'express-mcp-adapter', version: getVersion() },
+    { name: 'supergateway', version: getVersion() },
     { capabilities: {} },
   )
 

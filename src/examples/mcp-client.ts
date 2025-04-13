@@ -4,8 +4,13 @@ import {
   Response,
   RequestHandler,
   NextFunction,
+  raw as expressRaw, // Import raw body parser
 } from 'express'
-import { v4 as uuidv4 } from 'uuid'
+import { Server } from '@modelcontextprotocol/sdk/server/index.js'
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js'
+import { Tool, ToolSchema } from '@modelcontextprotocol/sdk/types.js' // Import ToolSchema
+import { z } from 'zod'
+import express from 'express'
 
 /**
  * MCPClient tool implementation type
@@ -13,14 +18,14 @@ import { v4 as uuidv4 } from 'uuid'
 export interface ToolImpl<T = any> {
   name: string
   description: string
-  inputSchema: {
-    type: string
-    properties: Record<string, any>
-    required: string[]
-  }
+  // Use the correct SDK key: inputSchema (camelCase)
+  inputSchema: Tool['inputSchema']
   handler: (args: T) => Promise<{
-    content: Array<{ type: string; text: string }>
-    isError: boolean
+    content: Array<
+      | { type: string; text?: string }
+      | { type: string; data?: string; mimeType?: string }
+    >
+    isError?: boolean
   }>
 }
 
@@ -28,297 +33,304 @@ export interface ToolImpl<T = any> {
  * MCPClient options
  */
 export interface MCPClientOptions {
-  endpoint?: string
+  endpoint: string // Make endpoint required for clarity
   tools: ToolImpl[]
   serverName?: string
   serverVersion?: string
 }
 
 /**
- * MCPClient class for handling MCP protocol in Express
+ * MCPClient class using the MCP SDK Server for handling protocol in Express
  */
 export class MCPClient {
   private router: Router
   private endpoint: string
-  private tools: ToolImpl[]
-  private serverName: string
-  private serverVersion: string
-  private connections: Record<string, Response> = {}
+  private server: Server // Use the SDK Server
+  private ssePath: string
+  private messagePath: string
+  private toolDefinitionsMap: Record<string, Tool> // Map tool name to Tool definition
+
+  // Store active transports by sessionId
+  private activeTransports: Record<string, SSEServerTransport> = {}
 
   /**
    * Create a new MCPClient instance
    */
   constructor(options: MCPClientOptions) {
     this.router = Router()
-    this.endpoint = options.endpoint || ''
-    this.tools = options.tools || []
-    this.serverName = options.serverName || 'mcp-server'
-    this.serverVersion = options.serverVersion || '1.0.0'
+    this.endpoint = options.endpoint.startsWith('/')
+      ? options.endpoint
+      : `/${options.endpoint}`
+    this.endpoint = this.endpoint.endsWith('/')
+      ? this.endpoint.slice(0, -1)
+      : this.endpoint // Normalize
 
+    // Define paths RELATIVE to the endpoint mount point
+    this.ssePath = '/sse'
+    this.messagePath = '/message'
+
+    const serverName = options.serverName || 'mcp-server'
+    const serverVersion = options.serverVersion || '1.0.0'
+
+    // Create and validate tool definitions using the SDK schema
+    this.toolDefinitionsMap = {} // This still stores the full Tool objects
+    const capabilitiesToolsMap: Record<string, Omit<Tool, 'name'>> = {} // This map is for capabilities
+
+    options.tools.forEach((impl) => {
+      const toolDefinition: Omit<Tool, 'inputSchema'> & { inputSchema: any } = {
+        name: impl.name,
+        description: impl.description,
+        inputSchema: impl.inputSchema || { type: 'object', properties: {} },
+      }
+
+      try {
+        const validatedTool = ToolSchema.parse(toolDefinition)
+        this.toolDefinitionsMap[impl.name] = validatedTool
+        // Populate the capabilities map correctly
+        capabilitiesToolsMap[validatedTool.name] = {
+          description: validatedTool.description,
+          inputSchema: validatedTool.inputSchema,
+        }
+      } catch (e) {
+        console.error(
+          `[MCPClient] Invalid tool definition for "${impl.name}":`,
+          (e as Error).message,
+        )
+      }
+    })
+
+    // Create the SDK Server instance with the correctly structured capabilities map
+    this.server = new Server(
+      { name: serverName, version: serverVersion },
+      {
+        capabilities: {
+          tools: capabilitiesToolsMap, // Use the map with { description, inputSchema }
+          prompts: {},
+        },
+      },
+    )
+
+    this.setupRequestHandlers(options.tools)
     this.setupRoutes()
   }
 
   /**
-   * Set up the MCP routes
+   * Setup request handlers using the SDK Server
+   */
+  private setupRequestHandlers(tools: ToolImpl[]): void {
+    // **Explicitly handle tools/list again**
+    const ListToolsRequestSchema = z
+      .object({
+        method: z.literal('tools/list'),
+        // We don't expect params, but passthrough allows flexibility
+        params: z.record(z.any()).optional(),
+      })
+      .passthrough()
+
+    this.server.setRequestHandler(ListToolsRequestSchema, async () => {
+      console.log('[MCPClient] Handling tools/list request explicitly')
+      // Return the tools as an array, conforming to ListToolsResultSchema
+      const toolList = Object.values(this.toolDefinitionsMap)
+      console.log(
+        `[MCPClient] Returning ${toolList.length} tools for tools/list`,
+      )
+      return { tools: toolList }
+    })
+
+    // Create a map for quick handler lookup for tools/call
+    const toolHandlerMap = new Map<string, ToolImpl['handler']>()
+    tools.forEach((impl) => {
+      if (this.toolDefinitionsMap[impl.name]) {
+        toolHandlerMap.set(impl.name, impl.handler)
+      }
+    })
+
+    // Handler for tools/call
+    if (toolHandlerMap.size > 0) {
+      const CallToolRequestSchema = z
+        .object({
+          method: z.literal('tools/call'),
+          params: z.object({
+            name: z.string(),
+            arguments: z.record(z.any()).optional(),
+          }),
+        })
+        .passthrough()
+
+      this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+        const toolName = request.params.name
+        const toolArgs = request.params.arguments || {}
+        console.log(
+          `[MCPClient] Handling tools/call for ${toolName} at endpoint ${this.endpoint}`,
+        )
+
+        const handler = toolHandlerMap.get(toolName)
+        if (!handler) {
+          console.error(`[MCPClient] Unknown tool called: ${toolName}`)
+          return {
+            content: [
+              { type: 'text', text: `Error: Unknown tool '${toolName}'` },
+            ],
+            isError: true,
+          }
+        }
+
+        try {
+          const result = await handler(toolArgs)
+          console.log(
+            `[MCPClient] Tool ${toolName} executed. Result:`,
+            JSON.stringify(result).substring(0, 100) + '...',
+          )
+          return {
+            content: result.content || [],
+            isError: result.isError || false,
+          }
+        } catch (error) {
+          console.error(`[MCPClient] Error executing tool ${toolName}:`, error)
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Error executing tool ${toolName}: ${error}`,
+              },
+            ],
+            isError: true,
+          }
+        }
+      })
+    }
+
+    // Handler for prompts/list (remains the same)
+    const PromptsListSchema = z
+      .object({
+        method: z.literal('prompts/list'),
+      })
+      .passthrough()
+    this.server.setRequestHandler(PromptsListSchema, async () => {
+      console.log('[MCPClient] Handling prompts/list via SDK Server')
+      return { prompts: [] }
+    })
+  }
+
+  /**
+   * Set up the Express routes using SDK Transport
    */
   private setupRoutes(): void {
-    // SSE endpoint
-    this.router.get('/sse', this.handleSse)
+    // Use the RELATIVE paths defined earlier (/sse, /message)
+    this.router.get(this.ssePath, async (req: Request, res: Response) => {
+      console.log(
+        `[MCPClient] SSE connection request to ${req.originalUrl} from ${req.ip}`,
+      )
 
-    // Message endpoint
-    this.router.post('/message', this.handleMessage)
-  }
+      res.setHeader('Content-Type', 'text/event-stream')
+      res.setHeader('Cache-Control', 'no-cache')
+      res.setHeader('Connection', 'keep-alive')
+      res.setHeader('Access-Control-Allow-Origin', '*')
 
-  /**
-   * Handle SSE connections
-   */
-  private handleSse = (req: Request, res: Response): void => {
-    console.log(`New SSE connection to ${this.endpoint}/sse`)
+      // Construct the message URL using the *mounted* endpoint path
+      const host = req.get('host') || 'localhost:8000'
+      const protocol = req.protocol || 'http'
+      const baseUrl = `${protocol}://${host}`
+      // IMPORTANT: Use req.baseUrl which contains the mount path (e.g., /agent-1)
+      const msgUrl = `${baseUrl}${req.baseUrl}${this.messagePath}`
+      console.log(
+        `[MCPClient] Calculated message URL for SSE transport: ${msgUrl}`,
+      )
 
-    // Set up SSE headers
-    res.setHeader('Content-Type', 'text/event-stream')
-    res.setHeader('Cache-Control', 'no-cache')
-    res.setHeader('Connection', 'keep-alive')
+      const transport = new SSEServerTransport(msgUrl, res)
+      const sessionId = transport.sessionId
 
-    // Generate session ID
-    const sessionId = uuidv4()
-    this.connections[sessionId] = res
-
-    // Send a ping every 30 seconds to keep the connection alive
-    const keepAliveInterval = setInterval(() => {
-      res.write(': ping\n\n')
-    }, 30000)
-
-    // Send the initialize response
-    const initResponse = {
-      jsonrpc: '2.0',
-      id: 0,
-      result: {
-        serverInfo: {
-          name: this.serverName,
-          version: this.serverVersion,
-        },
-        capabilities: {
-          tools: {},
-          prompts: {},
-        },
-      },
-    }
-
-    this.sendSseMessage(res, initResponse)
-
-    // Handle client disconnect
-    req.on('close', () => {
-      console.log(`SSE connection closed for session ${sessionId}`)
-      clearInterval(keepAliveInterval)
-      delete this.connections[sessionId]
-    })
-  }
-
-  /**
-   * Handle message requests
-   */
-  private handleMessage = async (
-    req: Request,
-    res: Response,
-  ): Promise<void> => {
-    const sessionId = req.query.sessionId as string
-
-    if (!sessionId) {
-      res.status(400).json({ error: 'Missing sessionId parameter' })
-      return
-    }
-
-    const connection = this.connections[sessionId]
-    if (!connection) {
-      res.status(404).json({ error: 'Session not found' })
-      return
-    }
-
-    // Process the incoming request
-    const request = req.body
-    console.log(
-      `Received message for endpoint ${this.endpoint}, session ${sessionId}:`,
-      request,
-    )
-
-    // Handle different MCP requests
-    try {
-      if (request.method === 'tools/list') {
-        await this.handleToolsList(request, connection, res)
-      } else if (request.method === 'tools/call') {
-        await this.handleToolsCall(request, connection, res)
-      } else if (request.method === 'prompts/list') {
-        await this.handlePromptsList(request, connection, res)
-      } else if (request.method === 'initialize') {
-        await this.handleInitialize(request, connection, res)
+      if (sessionId) {
+        this.activeTransports[sessionId] = transport
+        console.log(
+          `[MCPClient] SSE Transport created for session: ${sessionId}`,
+        )
       } else {
-        this.sendSseMessage(connection, {
-          jsonrpc: '2.0',
-          id: request.id,
-          error: {
-            code: -32601,
-            message: `Method not found: ${request.method}`,
-          },
-        })
-        res.json({ status: 'ok' })
+        console.error('[MCPClient] Failed to get session ID')
+        res.status(500).send('Internal Server Error')
+        return
       }
-    } catch (error) {
-      console.error(`Error handling request:`, error)
-      this.sendSseMessage(connection, {
-        jsonrpc: '2.0',
-        id: request.id,
-        error: {
-          code: -32000,
-          message: `Internal error: ${error}`,
-        },
+
+      const pingInterval = setInterval(() => {
+        try {
+          if (!res.writableEnded) {
+            res.write(': ping\n\n')
+          } else {
+            clearInterval(pingInterval)
+          }
+        } catch (e) {
+          console.error(
+            `[MCPClient] Error sending ping for session ${sessionId}:`,
+            e,
+          )
+          clearInterval(pingInterval)
+        }
+      }, 30000)
+
+      req.on('close', () => {
+        console.log(
+          `[MCPClient] SSE connection closed for session ${sessionId}`,
+        )
+        clearInterval(pingInterval)
+        transport.close()
+        delete this.activeTransports[sessionId]
       })
-      res.json({ status: 'error', message: String(error) })
-    }
-  }
 
-  /**
-   * Handle tools/list request
-   */
-  private async handleToolsList(
-    request: any,
-    connection: Response,
-    res: Response,
-  ): Promise<void> {
-    // Extract just the tool definitions (omit handlers)
-    const toolDefinitions = this.tools.map(
-      ({ name, description, inputSchema }) => ({
-        name,
-        description,
-        inputSchema,
-      }),
-    )
-
-    this.sendSseMessage(connection, {
-      jsonrpc: '2.0',
-      id: request.id,
-      result: {
-        tools: toolDefinitions,
-      },
-    })
-
-    res.json({ status: 'ok' })
-  }
-
-  /**
-   * Handle tools/call request
-   */
-  private async handleToolsCall(
-    request: any,
-    connection: Response,
-    res: Response,
-  ): Promise<void> {
-    const toolName = request.params.name
-    const args = request.params.arguments
-
-    console.log(`Tool call: ${toolName}`, args)
-
-    // Find the requested tool by name
-    const toolImpl = this.tools.find((tool) => tool.name === toolName)
-
-    let result
-
-    if (toolImpl) {
       try {
-        // Call the tool's handler with the arguments
-        result = await toolImpl.handler(args)
-      } catch (error) {
-        console.error(`Error executing tool ${toolName}:`, error)
-        result = {
-          content: [
-            {
-              type: 'text',
-              text: `Error executing tool ${toolName}: ${error}`,
-            },
-          ],
-          isError: true,
+        await this.server.connect(transport)
+        console.log(`[MCPClient] SDK Server connected for session ${sessionId}`)
+      } catch (err) {
+        console.error(
+          `[MCPClient] Error connecting SDK Server for session ${sessionId}:`,
+          err,
+        )
+        clearInterval(pingInterval)
+        delete this.activeTransports[sessionId]
+        if (!res.headersSent) {
+          res.status(500).send('Internal Server Error')
         }
       }
-    } else {
-      result = {
-        content: [
-          {
-            type: 'text',
-            text: `Error: Unknown tool '${toolName}'`,
-          },
-        ],
-        isError: true,
+    })
+
+    this.router.post(this.messagePath, async (req: Request, res: Response) => {
+      const sessionId = req.query.sessionId as string
+      if (!sessionId) {
+        console.error('[MCPClient] Message request missing sessionId')
+        res.status(400).send('Missing sessionId')
+        return
       }
-    }
 
-    this.sendSseMessage(connection, {
-      jsonrpc: '2.0',
-      id: request.id,
-      result: result,
+      const transport = this.activeTransports[sessionId]
+      if (!transport) {
+        console.error(`[MCPClient] Session not found: ${sessionId}`)
+        res.status(404).send('Session not found')
+        return
+      }
+
+      console.log(`[MCPClient] POST message for session: ${sessionId}`)
+
+      try {
+        await transport.handlePostMessage(req, res)
+        console.log(
+          `[MCPClient] SDK Transport handled POST for session ${sessionId}`,
+        )
+      } catch (error) {
+        console.error(
+          `[MCPClient] Error handlePostMessage for session ${sessionId}:`,
+          error,
+        )
+        if (!res.headersSent) {
+          res.status(500).send('Internal Server Error')
+        }
+      }
     })
-
-    res.json({ status: 'ok' })
-  }
-
-  /**
-   * Handle prompts/list request
-   */
-  private async handlePromptsList(
-    request: any,
-    connection: Response,
-    res: Response,
-  ): Promise<void> {
-    this.sendSseMessage(connection, {
-      jsonrpc: '2.0',
-      id: request.id,
-      result: {
-        prompts: [],
-      },
-    })
-
-    res.json({ status: 'ok' })
-  }
-
-  /**
-   * Handle initialize request
-   */
-  private async handleInitialize(
-    request: any,
-    connection: Response,
-    res: Response,
-  ): Promise<void> {
-    this.sendSseMessage(connection, {
-      jsonrpc: '2.0',
-      id: request.id,
-      result: {
-        serverInfo: {
-          name: this.serverName,
-          version: this.serverVersion,
-        },
-        capabilities: {
-          tools: {},
-          prompts: {},
-        },
-      },
-    })
-
-    res.json({ status: 'ok' })
-  }
-
-  /**
-   * Send SSE message
-   */
-  private sendSseMessage(res: Response, data: any): void {
-    res.write(`data: ${JSON.stringify(data)}\n\n`)
   }
 
   /**
    * Return middleware that can be used with Express
    */
   public middleware(): RequestHandler {
-    return (req: Request, res: Response, next: NextFunction) => {
-      this.router(req, res, next)
-    }
+    return this.router
   }
 
   /**

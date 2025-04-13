@@ -1,6 +1,6 @@
 {
   "name": "express-mcp-adapter",
-  "version": "1.0.0",
+  "version": "1.0.5",
   "description": "Express adapter for MCP servers.",
   "repository": {
     "type": "git",
@@ -24,18 +24,25 @@
     "format": "prettier --write 'src/**/*.ts' '*.json' '.prettierrc'",
     "format:check": "prettier --check 'src/**/*.ts' '*.json' '.prettierrc'",
     "prepare": "husky",
-    "example": "tsx src/examples/example-express.ts"
+    "example": "tsx src/examples/example-express.ts",
+    "test": "tsx src/test/langchain-test.ts"
   },
   "lint-staged": {
     "**/*": "prettier --write --ignore-unknown"
   },
   "dependencies": {
+    "@langchain/anthropic": "^0.3.17",
+    "@langchain/core": "^0.3.44",
+    "@langchain/langgraph": "^0.2.63",
+    "@langchain/mcp-adapters": "^0.4.2",
     "@modelcontextprotocol/sdk": "^1.4.1",
     "@types/event-source-polyfill": "^1.0.5",
     "body-parser": "^1.20.3",
     "commander": "^13.1.0",
     "cors": "^2.8.5",
+    "dotenv": "^16.5.0",
     "event-source-polyfill": "^1.0.31",
+    "eventsource": "^3.0.6",
     "express": "^4.21.2",
     "uuid": "^11.1.0",
     "ws": "^8.18.1",

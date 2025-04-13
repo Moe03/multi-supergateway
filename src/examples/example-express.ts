@@ -19,7 +19,6 @@ for (let i = 0; i < args.length; i++) {
 // Create Express app
 const app = express()
 app.use(cors())
-app.use(express.json())
 
 // Define weather tool implementation
 const weatherTool: ToolImpl<{ location: string }> = {
@@ -111,9 +110,12 @@ const agent2 = new MCPClient({
   serverVersion: '1.0.0',
 })
 
-// Use the MCPClient middleware with their respective routes
+// Mount agent routers BEFORE the global JSON parser
 app.use('/agent-1', agent1.middleware())
 app.use('/agent-2', agent2.middleware())
+
+// Apply global JSON parser AFTER agent routes
+app.use(express.json())
 
 // Health check endpoint
 app.get('/health', (_req, res) => {
