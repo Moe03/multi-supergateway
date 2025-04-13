@@ -1,201 +1,161 @@
-![Supergateway: Run stdio MCP servers over SSE and WS](https://raw.githubusercontent.com/supercorp-ai/supergateway/main/supergateway.png)
+# MCP Server with Multiple Endpoints
 
-**Supergateway** runs **MCP stdio-based servers** over **SSE (Server-Sent Events)** or **WebSockets (WS)** with one command. This is useful for remote access, debugging, or connecting to clients when your MCP server only supports stdio.
+Run a single MCP server with multiple endpoints, ideal for multi-agent systems.
 
-Supported by [Supermachine](https://supermachine.ai) (hosted MCPs), [Superinterface](https://superinterface.ai), and [Supercorp](https://supercorp.ai).
-
-## Installation & Usage
-
-Run Supergateway via `npx`:
+## Installation
 
 ```bash
-npx -y supergateway --stdio "uvx mcp-server-git"
+npm install -g multi-mcp-server
 ```
 
-- **`--stdio "command"`**: Command that runs an MCP server over stdio
-- **`--sse "https://mcp-server-ab71a6b2-cd55-49d0-adba-562bc85956e3.supermachine.app"`**: SSE URL to connect to (SSE→stdio mode)
-- **`--outputTransport stdio | sse | ws`**: Output MCP transport (default: `sse` with `--stdio`, `stdio` with `--sse`)
-- **`--port 8000`**: Port to listen on (stdio→SSE or stdio→WS mode, default: `8000`)
-- **`--baseUrl "http://localhost:8000"`**: Base URL for SSE or WS clients (stdio→SSE mode; optional)
-- **`--ssePath "/sse"`**: Path for SSE subscriptions (stdio→SSE mode, default: `/sse`)
-- **`--messagePath "/message"`**: Path for messages (stdio→SSE or stdio→WS mode, default: `/message`)
-- **`--header "Authorization: Bearer 123"`**: Add one or more headers (stdio→SSE or SSE→stdio mode; can be used multiple times)
-- **`--logLevel info | none`**: Controls logging level (default: `info`). Use `none` to suppress all logs.
-- **`--cors`**: Enable CORS (stdio→SSE or stdio→WS mode)
-- **`--healthEndpoint /healthz`**: Register one or more endpoints (stdio→SSE or stdio→WS mode; can be used multiple times) that respond with `"ok"`
+## Usage
 
-## stdio → SSE
-
-Expose an MCP stdio server as an SSE server:
+Run an MCP server with multiple endpoints:
 
 ```bash
-npx -y supergateway \
-    --stdio "npx -y @modelcontextprotocol/server-filesystem ./my-folder" \
-    --port 8000 --baseUrl http://localhost:8000 \
-    --ssePath /sse --messagePath /message
+mcpserver --command "npx -y @modelcontextprotocol/server-demo" --endpoints /agent-1,/agent-2,/agent-3
 ```
 
-- **Subscribe to events**: `GET http://localhost:8000/sse`
-- **Send messages**: `POST http://localhost:8000/message`
+### Options
 
-## SSE → stdio
+- `--command`, `-c`: The command to run the MCP server (required)
+- `--port`, `-p`: Port to listen on (default: 8000)
+- `--endpoints`, `-e`: Comma-separated list of endpoints (default: "/agent-1,/agent-2")
+- `--cors`: Enable CORS (default: false)
 
-Connect to a remote SSE server and expose locally via stdio:
+## Example
+
+Start a server with two agents:
 
 ```bash
-npx -y supergateway --sse "https://mcp-server-ab71a6b2-cd55-49d0-adba-562bc85956e3.supermachine.app"
+mcpserver -c "npx -y @modelcontextprotocol/server-demo" -p 8000 -e "/agent-1,/agent-2" --cors
 ```
 
-Useful for integrating remote SSE MCP servers into local command-line environments.
+This creates:
 
-You can also pass headers when sending requests. This is useful for authentication:
+- http://localhost:8000/agent-1/sse
+- http://localhost:8000/agent-2/sse
+
+## Connecting with Claude
+
+1. Connect Claude to either endpoint:
+
+   In Claude.ai, go to the server menu and enter:
+
+   ```
+   http://localhost:8000/agent-1/sse
+   ```
+
+2. Each endpoint runs as a separate MCP server but uses the same underlying process, so all endpoints share tools and state.
+
+## Development
+
+Clone and build:
 
 ```bash
-npx -y supergateway \
-    --sse "https://mcp-server-ab71a6b2-cd55-49d0-adba-562bc85956e3.supermachine.app" \
-    --header "Authorization: Bearer some-token" \
-    --header "X-My-Header: another-value"
+git clone https://your-repo-url/multi-mcp-server.git
+cd multi-mcp-server
+npm install
+npm run build
 ```
 
-## stdio → WS
-
-Expose an MCP stdio server as a WebSocket server:
+Run in development mode:
 
 ```bash
-npx -y supergateway \
-    --stdio "npx -y @modelcontextprotocol/server-filesystem ./my-folder" \
-    --port 8000 --outputTransport ws --messagePath /message
+npm run dev -- -c "your-mcp-command"
 ```
-
-- **WebSocket endpoint**: `ws://localhost:8000/message`
-
-## Example with MCP Inspector (stdio → SSE mode)
-
-1. **Run Supergateway**:
-
-```bash
-npx -y supergateway --port 8000 \
-    --stdio "npx -y @modelcontextprotocol/server-filesystem /Users/MyName/Desktop"
-```
-
-2. **Use MCP Inspector**:
-
-```bash
-npx @modelcontextprotocol/inspector
-```
-
-You can now list tools, resources, or perform MCP actions via Supergateway.
-
-## Using with ngrok
-
-Use [ngrok](https://ngrok.com/) to share your local MCP server publicly:
-
-```bash
-npx -y supergateway --port 8000 \
-    --stdio "npx -y @modelcontextprotocol/server-filesystem ."
-
-# In another terminal:
-ngrok http 8000
-```
-
-ngrok provides a public URL for remote access.
-
-## Running with Docker
-
-A Docker-based workflow avoids local Node.js setup. A ready-to-run Docker image is available here:
-[supercorp/supergateway](https://hub.docker.com/r/supercorp/supergateway). Also on GHCR: [ghcr.io/supercorp-ai/supergateway](https://github.com/supercorp-ai/supergateway/pkgs/container/supergateway)
-
-### Using the Official Image
-
-```bash
-docker run -it --rm -p 8000:8000 supercorp/supergateway \
-    --stdio "npx -y @modelcontextprotocol/server-filesystem /" \
-    --port 8000
-```
-
-Docker pulls the image automatically. The MCP server runs in the container’s root directory (`/`). You can mount host directories if needed.
-
-### Building the Image Yourself
-
-Use provided Dockerfile:
-
-```bash
-docker build -t supergateway .
-
-docker run -it --rm -p 8000:8000 supergateway \
-    --stdio "npx -y @modelcontextprotocol/server-filesystem /" \
-    --port 8000
-```
-
-## Using with Claude Desktop (SSE → stdio mode)
-
-Claude Desktop can use Supergateway’s SSE→stdio mode.
-
-### NPX-based MCP Server Example
-
-```json
-{
-  "mcpServers": {
-    "supermachineExampleNpx": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "supergateway",
-        "--sse",
-        "https://mcp-server-ab71a6b2-cd55-49d0-adba-562bc85956e3.supermachine.app"
-      ]
-    }
-  }
-}
-```
-
-### Docker-based MCP Server Example
-
-```json
-{
-  "mcpServers": {
-    "supermachineExampleDocker": {
-      "command": "docker",
-      "args": [
-        "run",
-        "-i",
-        "--rm",
-        "supercorp/supergateway",
-        "--sse",
-        "https://mcp-server-ab71a6b2-cd55-49d0-adba-562bc85956e3.supermachine.app"
-      ]
-    }
-  }
-}
-```
-
-## Why MCP?
-
-[Model Context Protocol](https://spec.modelcontextprotocol.io/) standardizes AI tool interactions. Supergateway converts MCP stdio servers into SSE or WS services, simplifying integration and debugging with web-based or remote clients.
-
-## Advanced Configuration
-
-Supergateway emphasizes modularity:
-
-- Automatically manages JSON-RPC versioning.
-- Retransmits package metadata where possible.
-- stdio→SSE or stdio→WS mode logs via standard output; SSE→stdio mode logs via stderr.
-
-## Additional resources
-
-- [Superargs](https://github.com/supercorp-ai/superargs) - provide arguments to MCP servers during runtime.
-
-## Contributors
-
-- [@pcnfernando](https://github.com/pcnfernando)
-- [@Areo-Joe](https://github.com/Areo-Joe)
-- [@Joffref](https://github.com/Joffref)
-- [@michaeljguarino](https://github.com/michaeljguarino)
-
-## Contributing
-
-Issues and PRs welcome. Please open one if you encounter problems or have feature suggestions.
 
 ## License
 
-[MIT License](./LICENSE)
+MIT
+
+# express-mcp
+
+A simple command-line utility to connect to an Express MCP server's endpoint.
+
+## Installation
+
+```bash
+npm install -g express-mcp
+```
+
+## Usage
+
+Connect to an Express MCP server:
+
+```bash
+npx -y express-mcp --host http://localhost:8000/agent-1
+```
+
+This connects to the specified endpoint's `/sse` route and exposes it as stdio, allowing you to use MCP tools through the endpoint.
+
+### Options
+
+- `--host <url>`: The base URL of the Express MCP endpoint (required)
+- `--debug`: Enable debug logging
+- `--headers <headers>`: Comma-separated list of headers to include (format: key:value)
+
+## Examples
+
+### Basic connection
+
+```bash
+express-mcp --host http://localhost:8000/agent-1
+```
+
+### With debug logging
+
+```bash
+express-mcp --host http://localhost:8000/agent-2 --debug
+```
+
+### With custom headers
+
+```bash
+express-mcp --host http://localhost:8000/agent-1 --headers "Authorization:Bearer token,X-Custom:value"
+```
+
+## Integration with Claude Desktop
+
+You can use `express-mcp` with Claude Desktop by adding it to your MCP server configuration:
+
+```json
+{
+  "mcpServers": {
+    "myExpressMcpServer": {
+      "command": "npx",
+      "args": ["-y", "express-mcp", "--host", "http://localhost:8000/agent-1"]
+    }
+  }
+}
+```
+
+## How It Works
+
+1. Connects to the specified host's `/sse` endpoint (e.g., `http://localhost:8000/agent-1/sse`)
+2. Uses the corresponding message endpoint (e.g., `http://localhost:8000/agent-1/message`)
+3. Forwards SSE messages to stdout
+4. Sends stdin input to the message endpoint
+
+This allows you to use Express MCP endpoints as regular MCP servers through stdio communication.
+
+## Development
+
+Clone and build:
+
+```bash
+git clone https://your-repo-url/express-mcp.git
+cd express-mcp
+npm install
+npm run build
+```
+
+Run in development mode:
+
+```bash
+npm run dev -- --host http://localhost:8000/agent-1
+```
+
+## License
+
+MIT

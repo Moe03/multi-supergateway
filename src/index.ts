@@ -9,6 +9,10 @@
  *   npx -y supergateway --stdio "npx -y @modelcontextprotocol/server-filesystem /" \
  *                       --port 8000 --baseUrl http://localhost:8000 --ssePath /sse --messagePath /message
  *
+ *   # stdio→Multiple SSE Endpoints
+ *   npx -y supergateway --stdio "npx -y @modelcontextprotocol/server-filesystem /" \
+ *                       --port 8000 --endpoints /agent-1,/agent-2,/agent-3
+ *
  *   # SSE→stdio
  *   npx -y supergateway --sse "https://mcp-server-ab71a6b2-cd55-49d0-adba-562bc85956e3.supermachine.app"
  *
@@ -20,6 +24,7 @@ import yargs from 'yargs'
 import { hideBin } from 'yargs/helpers'
 import { Logger } from './types.js'
 import { stdioToSse } from './gateways/stdioToSse.js'
+import { stdioToMultiSse } from './gateways/stdioToMultiSse.js'
 import { sseToStdio } from './gateways/sseToStdio.js'
 import { stdioToWs } from './gateways/stdioToWs.js'
 
@@ -61,12 +66,13 @@ async function main() {
     })
     .option('outputTransport', {
       type: 'string',
-      choices: ['stdio', 'sse', 'ws'],
+      choices: ['stdio', 'sse', 'ws', 'multi-sse'],
       default: () => {
         const args = hideBin(process.argv)
 
         if (args.includes('--stdio')) return 'sse'
         if (args.includes('--sse')) return 'stdio'
+        if (args.includes('--endpoints')) return 'multi-sse'
 
         return undefined
       },
@@ -92,6 +98,11 @@ async function main() {
       type: 'string',
       default: '/message',
       description: '(stdio→SSE, stdio→WS) Path for messages',
+    })
+    .option('endpoints', {
+      type: 'string',
+      description:
+        'Comma-separated list of endpoint paths (e.g., /agent-1,/agent-2)',
     })
     .option('logLevel', {
       choices: ['info', 'none'] as const,
@@ -120,6 +131,7 @@ async function main() {
 
   const hasStdio = Boolean(argv.stdio)
   const hasSse = Boolean(argv.sse)
+  const hasEndpoints = Boolean(argv.endpoints)
 
   if (hasStdio && hasSse) {
     logStderr('Error: Specify only one of --stdio or --sse, not all')
@@ -129,20 +141,40 @@ async function main() {
     process.exit(1)
   }
 
+  // Set output transport to multi-sse if endpoints are specified
+  let outputTransport = argv.outputTransport as string
+  if (hasEndpoints && hasStdio) {
+    outputTransport = 'multi-sse'
+  }
+
   const logger = getLogger({
     logLevel: argv.logLevel,
-    outputTransport: argv.outputTransport as string,
+    outputTransport,
   })
 
   logger.info('Starting...')
   logger.info(
     'Supergateway is supported by Supermachine (hosted MCPs) - https://supermachine.ai',
   )
-  logger.info(`  - outputTransport: ${argv.outputTransport}`)
+  logger.info(`  - outputTransport: ${outputTransport}`)
 
   try {
     if (hasStdio) {
-      if (argv.outputTransport === 'sse') {
+      if (outputTransport === 'multi-sse') {
+        // Parse endpoints
+        const endpoints = argv.endpoints!.split(',').map((ep) => ep.trim())
+
+        await stdioToMultiSse({
+          stdioCmd: argv.stdio!,
+          port: argv.port,
+          baseUrl: argv.baseUrl,
+          endpoints,
+          logger,
+          enableCors: argv.cors,
+          healthEndpoints: argv.healthEndpoint as string[],
+          cliHeaders: argv.header as string[],
+        })
+      } else if (outputTransport === 'sse') {
         await stdioToSse({
           stdioCmd: argv.stdio!,
           port: argv.port,
@@ -154,7 +186,7 @@ async function main() {
           healthEndpoints: argv.healthEndpoint as string[],
           cliHeaders: argv.header as string[],
         })
-      } else if (argv.outputTransport === 'ws') {
+      } else if (outputTransport === 'ws') {
         await stdioToWs({
           stdioCmd: argv.stdio!,
           port: argv.port,
@@ -164,18 +196,18 @@ async function main() {
           healthEndpoints: argv.healthEndpoint as string[],
         })
       } else {
-        logStderr(`Error: stdio→${argv.outputTransport} not supported`)
+        logStderr(`Error: stdio→${outputTransport} not supported`)
         process.exit(1)
       }
     } else if (hasSse) {
-      if (argv.outputTransport === 'stdio') {
+      if (outputTransport === 'stdio') {
         await sseToStdio({
           sseUrl: argv.sse!,
           logger,
           headers: argv.header as string[],
         })
       } else {
-        logStderr(`Error: sse→${argv.outputTransport} not supported`)
+        logStderr(`Error: sse→${outputTransport} not supported`)
         process.exit(1)
       }
     } else {

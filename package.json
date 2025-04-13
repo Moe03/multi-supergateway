@@ -1,10 +1,10 @@
 {
-  "name": "supergateway",
-  "version": "2.6.0",
-  "description": "Run MCP stdio servers over SSE or visa versa",
+  "name": "express-mcp-adapter",
+  "version": "1.0.0",
+  "description": "Express adapter for MCP servers.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/supercorp-ai/supergateway.git"
+    "url": "git+https://github.com/Moe03/express-mcp.git"
   },
   "keywords": [
     "mcp",
@@ -16,22 +16,26 @@
   ],
   "type": "module",
   "bin": {
-    "supergateway": "dist/index.js"
+    "express-mcp": "dist/bin/express-mcp.js"
   },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
     "format": "prettier --write 'src/**/*.ts' '*.json' '.prettierrc'",
     "format:check": "prettier --check 'src/**/*.ts' '*.json' '.prettierrc'",
-    "prepare": "husky"
+    "prepare": "husky",
+    "example": "tsx src/examples/example-express.ts"
   },
   "lint-staged": {
     "**/*": "prettier --write --ignore-unknown"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.4.1",
+    "@types/event-source-polyfill": "^1.0.5",
     "body-parser": "^1.20.3",
+    "commander": "^13.1.0",
     "cors": "^2.8.5",
+    "event-source-polyfill": "^1.0.31",
     "express": "^4.21.2",
     "uuid": "^11.1.0",
     "ws": "^8.18.1",
@@ -51,5 +55,8 @@
     "ts-node": "^10.9.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
